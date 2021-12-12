@@ -1,0 +1,436 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+读取gpkg(三个layers 三层)
+```{r}
+library(sf)
+library(here)
+st_layers("gadm36_AUS.gpkg")
+```
+
+st读取个gpkg，选择读取其中gadm36_AUS_0层，这个是澳大利亚轮廓层
+```{r}
+library(sf)
+Ausoutline <- st_read( "gadm36_AUS.gpkg", 
+                      layer='gadm36_AUS_0')
+```
+Geometry type: MULTIPOLYGON就是sf
+sf object contain the information to enable points, lines or polygons to be drawn on the screen. 点 线 面 多边形
+```{r}
+print(Ausoutline)
+```
+proj4串意味着是识别坐标参考系统的紧凑的方式
+proj4string：对应的投影坐标系
+st_crs来看CRS
+```{r}
+library(sf)
+st_crs(Ausoutline)$proj4string
+```
+如果我们的澳大利亚轮廓没有空间参考系统，我们可以使用 st_set_crs()
+给他加上
+```{r}
+Ausoutline <- Ausoutline %>%
+  st_set_crs(., 4326)
+```
+
+```{r}
+#or more concisely
+Ausoutline <- st_read("gadm36_AUS.gpkg", 
+                      layer='gadm36_AUS_0') %>% 
+  st_set_crs(4326)
+```
+转换坐标系统
+```{r}
+AusoutlinePROJECTED <- Ausoutline %>%
+  st_transform(.,3112)
+
+print(AusoutlinePROJECTED)
+```
+sf转sp
+sp转sf
+```{r}
+#From sf to sp
+AusoutlineSP <- Ausoutline %>%
+  as(., "Spatial")
+
+#From sp to sf
+AusoutlineSF <- AusoutlineSP %>%
+  st_as_sf()
+```
+
+```{r}
+library(sp)
+library(raster)
+jan<-raster( "wc2.1_5m_tavg_01.tif")
+# have a look at the raster layer jan
+jan
+```
+```{r}
+plot(jan)
+```
+
+重新定义proj4 
+vector变成raster
+用projectRaster()
+
+```{r}
+# set the proj 4 to a new object
+newproj<-"+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+# get the jan raster and give it the new proj4
+pr1 <- jan %>%
+  projectRaster(., crs=newproj)
+plot(pr1)
+```
+可以在 PROJ4 字符串中仅使用 EPSG 代码，但是，某些投影没有 EPSG 代码。例如，如果我们只想从 Mollweide 返回到 WGS84，我们可以简单地将 crs 设置为"+init=epsg:4326"
+```{r}
+pr1 <- pr1 %>%
+  projectRaster(., crs="+init=epsg:4326")
+plot(pr1)
+```
+数据加载fs中的dir_info()
+然后dplyr与stringr中的str_detect()结合以搜索包含tif. 最后只选择路径。
+```{r}
+# look in our folder, find the files that end with .tif and 
+library(fs)
+dir_info("prac3_data/") 
+```
+select()同时存在于dplyr和raster包中
+所以要用dplyr::select来使select函数运用正确
+在这里，我们还使用dplyr包中的pull()与$通常用于提取列的相同，因为在下一阶段输入必须是作为字符的文件名（没有其他像列名）。
+```{r}
+library(tidyverse)
+listfiles<-dir_info("prac3_data/") %>%
+  filter(str_detect(path, ".tif")) %>%
+  dplyr::select(path)%>%
+  pull()
+
+#have a look at the file names 
+listfiles
+```
+
+然后将所有数据直接加载到光栅堆栈中。栅格堆栈是具有相同空间范围和分辨率的栅格图层的集合。
+```{r}
+worldclimtemp <- listfiles %>%
+  stack()
+  
+#have a look at the raster stack
+worldclimtemp
+```
+提取一月
+```{r}
+# access the january layer
+worldclimtemp[[1]]
+```
+我们还可以重命名堆栈中的层：
+ps:无法使用rename命名栅格数据
+上周我们rename()从dplyr包中使用，但是，这还不适用于栅格数据
+```{r}
+  month <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+names(worldclimtemp) <- month
+```
+新命名的提取
+```{r}
+worldclimtemp$Jan
+```
+使用栅格堆栈，我们可以通过一个命令提取数据！！例如，让我们制作一些示例站点的数据框——澳大利亚城市/城镇。
+```{r}
+site <- c("Brisbane", "Melbourne", "Perth", "Sydney", "Broome", "Darwin", "Orange", 
+          "Bunbury", "Cairns", "Adelaide", "Gold Coast", "Canberra", "Newcastle", 
+          "Wollongong", "Logan City" )
+lon <- c(153.03, 144.96, 115.86, 151.21, 122.23, 130.84, 149.10, 115.64, 145.77, 
+         138.6, 153.43, 149.13, 151.78, 150.89, 153.12)
+lat <- c(-27.47, -37.91, -31.95, -33.87, 17.96, -12.46, -33.28, -33.33, -16.92, 
+         -34.93, -28, -35.28, -32.93, -34.42, -27.64)
+#Put all of this inforamtion into one list 
+samples <- data.frame(site, lon, lat, row.names="site")
+# Extract the data from the Rasterstack for all points 
+AUcitytemp<- raster::extract(worldclimtemp, samples)
+```
+
+将城市名称添加到 Aucitytemp 的行中
+```{r}
+Aucitytemp2 <- AUcitytemp %>% 
+  as_tibble()%>% 
+  add_column(Site = site, .before = "Jan")
+```
+
+Let’s take Perth as an example. We can subset our data either using the row name:
+```{r}
+Perthtemp <- Aucitytemp2 %>%
+  filter(site=="Perth")
+```
+Or the row location:
+```{r}
+Perthtemp <- Aucitytemp2[3,]
+```
+
+hist()函数需要它作为数字
+```{r}
+hist(as.numeric(Perthtemp))
+```
+
+更美观
+```{r}
+#define where you want the breaks in the historgram
+userbreak<-c(8,10,12,14,16,18,20,22,24,26)
+hist(as.numeric(Perthtemp), 
+     breaks=userbreak, 
+     col="red", 
+     main="Histogram of Perth Temperature", 
+     xlab="Temperature", 
+     ylab="Frequency")
+```
+第二种方法
+这个用了管道函数
+```{r}
+histinfo <- Perthtemp %>%
+  as.numeric()%>%
+  hist(.)
+```
+直方图信息
+```{r}
+histinfo
+```
+
+```{r}
+plot(Ausoutline$geom)
+```
+
+但是由于.shp它非常复杂（即很多点），我们可以先用rmapshaper包简化它
+```{r}
+#load the rmapshaper package
+library(rmapshaper)
+#simplify the shapefile
+#keep specifies the % of points
+#to keep
+AusoutSIMPLE<-Ausoutline %>%
+  ms_simplify(.,keep=0.05)
+
+plot(AusoutSIMPLE$geom)
+```
+检查范围
+基本信息
+```{r}
+print(Ausoutline)
+#this works nicely for rasters
+crs(worldclimtemp)
+```
+
+```{r}
+Austemp <- Ausoutline %>%
+  # now crop our temp data to the extent
+  crop(worldclimtemp,.)
+
+# plot the output
+plot(Austemp)
+```
+您会注意到，虽然我们拥有整个澳大利亚，但栅格并没有完美地裁剪到准确的轮廓……范围只是指定了一个范围框，将覆盖整个形状。
+
+ 如果只想获取形状轮廓内的栅格数据：
+```{r}
+exactAus <- Austemp %>%
+  mask(.,Ausoutline, na.rm=TRUE)
+```
+让我们重新计算三月份澳大利亚的直方图。我们可以像以前一样使用 hist 。我们可以使用位置子集（我们知道 March 在 RasterBrick 中排名第三）。
+```{r}
+#subset using the known location of the raster
+hist(exactAus[[3]], col="red", main ="March temperature")
+```
+
+```{r}
+#OR
+#subset with the word Mar
+hist(raster::subset(exactAus, "Mar"), col="red", main ="March temperature")
+```
+我们需要使用 dataframeggplot2或tibble 将我们的栅格转换为 data.frame 以与 兼容
+```{r}
+exactAusdf <- exactAus %>%
+  as.data.frame()
+```
+
+```{r}
+library(ggplot2)
+# set up the basic histogram
+gghist <- ggplot(exactAusdf, 
+                 aes(x=Mar)) + 
+  geom_histogram(color="black", 
+                 fill="white")+
+  labs(title="Ggplot2 histogram of Australian March temperatures", 
+       x="Temperature", 
+       y="Frequency")
+# add a vertical line to the hisogram showing mean tempearture
+gghist + geom_vline(aes(xintercept=mean(Mar, 
+                                        na.rm=TRUE)),
+            color="blue", 
+            linetype="dashed", 
+            size=1)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+我们需要使用 将变量（月）放入一列中pivot_longer()。在这里，我们说选择第 1-12 列（所有月份）并将它们放在一个名为的新列中，Month并将它们的值放在另一个名为Temp
+```{r}
+library(tidyverse)
+squishdata<-exactAusdf%>%
+  pivot_longer(
+  cols = 1:12,
+  names_to = "Month",
+  values_to = "Temp"
+)
+```
+
+然后对数据进行子集化，使用filter()选择两个月
+```{r}
+twomonths <- squishdata %>%
+  # | = OR
+  filter(., Month=="Jan" | Month=="Jun")
+```
+
+```{r}
+meantwomonths <- twomonths %>%
+  group_by(Month) %>%
+  summarise(mean=mean(Temp, na.rm=TRUE))
+
+meantwomonths
+```
+
+```{r}
+ggplot(twomonths, aes(x=Temp, color=Month, fill=Month)) +
+  geom_histogram(position="identity", alpha=0.5)+
+  geom_vline(data=meantwomonths, 
+             aes(xintercept=mean, 
+                 color=Month),
+             linetype="dashed")+
+  labs(title="Ggplot2 histogram of Australian Jan and Jun
+       temperatures",
+       x="Temperature",
+       y="Frequency")+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+data_complete_cases <- squishdata %>%
+  drop_na()%>% 
+  mutate(Month = factor(Month, levels = c("Jan","Feb","Mar",
+                                          "Apr","May","Jun",
+                                          "Jul","Aug","Sep",
+                                          "Oct","Nov","Dec")))
+
+# Plot faceted histogram
+ggplot(data_complete_cases, aes(x=Temp, na.rm=TRUE))+
+  geom_histogram(color="black", binwidth = 5)+
+  labs(title="Ggplot2 faceted histogram of Australian temperatures", 
+       x="Temperature",
+       y="Frequency")+
+  facet_grid(Month ~ .)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+library(plotly)
+# split the data for plotly based on month
+
+jan <- squishdata %>%
+  drop_na() %>%
+  filter(., Month=="Jan")
+
+jun <- squishdata %>%
+  drop_na() %>%
+  filter(., Month=="Jun")
+
+# give axis titles
+x <- list (title = "Temperature")
+y <- list (title = "Frequency")
+
+# set the bin width
+xbinsno<-list(start=0, end=40, size = 2.5)
+
+# plot the histogram calling all the variables we just set
+ihist<-plot_ly(alpha = 0.6) %>%
+        add_histogram(x = jan$Temp,
+        xbins=xbinsno, name="January") %>%
+        add_histogram(x = jun$Temp,
+        xbins=xbinsno, name="June") %>% 
+        layout(barmode = "overlay", xaxis=x, yaxis=y)
+
+ihist
+```
+
+```{r}
+# mean per month
+meanofall <- squishdata %>%
+  group_by(Month) %>%
+  summarise(mean = mean(Temp, na.rm=TRUE))
+
+# print the top 1
+head(meanofall, n=1)
+```
+
+```{r}
+# standard deviation per month
+sdofall <- squishdata %>%
+  group_by(Month) %>%
+  summarize(sd = sd(Temp, na.rm=TRUE))
+
+# maximum per month
+maxofall <- squishdata %>%
+  group_by(Month) %>%
+  summarize(max = max(Temp, na.rm=TRUE))
+
+# minimum per month
+minofall <- squishdata %>%
+  group_by(Month) %>%
+  summarize(min = min(Temp, na.rm=TRUE))
+
+# Interquartlie range per month
+IQRofall <- squishdata %>%
+  group_by(Month) %>%
+  summarize(IQR = IQR(Temp, na.rm=TRUE))
+
+# perhaps you want to store multiple outputs in one list..
+lotsofstats <- squishdata %>%
+  group_by(Month) %>%
+  summarize(IQR = IQR(Temp, na.rm=TRUE), 
+            max=max(Temp, na.rm=T))
+
+# or you want to know the mean (or some other stat) 
+#for the whole year as opposed to each month...
+
+meanwholeyear=squishdata %>%
+  summarize(meanyear = mean(Temp, na.rm=TRUE))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
